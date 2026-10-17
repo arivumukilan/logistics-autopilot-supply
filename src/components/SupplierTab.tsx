@@ -9,11 +9,12 @@ interface SupplierTabProps {
   isProcessing: boolean;
   onSupplierAction: (params: {
     poId: string;
-    action: 'CONFIRM' | 'SHIP' | 'UPLOAD_INVOICE';
+    action: 'CONFIRM' | 'SHIP' | 'UPLOAD_INVOICE' | 'REJECT';
     trackingNumber?: string;
     promisedDate?: string;
     invoiceAmount?: number;
     invoiceRef?: string;
+    notes?: string;
   }) => Promise<void>;
   onTriggerChaserTick: () => Promise<void>;
 }
@@ -148,9 +149,28 @@ export const SupplierTab: React.FC<SupplierTabProps> = ({
                         ${po.estimatedValue.toLocaleString()}
                       </td>
                       <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-800">
-                          {po.status}
+                        <span className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                          po.status === 'REJECTED'
+                            ? 'bg-red-50 text-red-700 border border-red-200'
+                            : po.status === 'CLOSED' && po.finalResolution === 'FULFILLED_WITH_DAMAGE_CLAIM'
+                            ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                            : po.status === 'CLOSED'
+                            ? 'bg-slate-100 text-slate-800'
+                            : po.status === 'ORDERED'
+                            ? 'bg-blue-50 text-blue-700'
+                            : 'bg-emerald-50 text-emerald-700'
+                        }`}>
+                          {po.status === 'CLOSED' && po.finalResolution === 'FULFILLED_WITH_DAMAGE_CLAIM'
+                            ? 'CLOSED (CLAIM)'
+                            : po.status === 'REJECTED'
+                            ? 'REJECTED (DECLINED)'
+                            : po.status}
                         </span>
+                        {po.damagedQty && po.damagedQty > 0 ? (
+                          <span className="block text-[10px] text-amber-700 font-bold mt-0.5">
+                            ⚠️ {po.damagedQty} units damaged
+                          </span>
+                        ) : null}
                       </td>
                       <td className="py-3 px-4 text-slate-500">
                         {po.neededBy}
@@ -173,13 +193,28 @@ export const SupplierTab: React.FC<SupplierTabProps> = ({
                       </td>
                       <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5">
                         {po.status === 'ORDERED' && (
-                          <button
-                            onClick={() => onSupplierAction({ poId: po.id, action: 'CONFIRM' })}
-                            disabled={isProcessing}
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold cursor-pointer"
-                          >
-                            1. Confirm Order
-                          </button>
+                          <>
+                            <button
+                              onClick={() => onSupplierAction({ poId: po.id, action: 'CONFIRM' })}
+                              disabled={isProcessing}
+                              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-semibold cursor-pointer"
+                            >
+                              1. Confirm Order
+                            </button>
+                            <button
+                              onClick={() =>
+                                onSupplierAction({
+                                  poId: po.id,
+                                  action: 'REJECT',
+                                  notes: `${activeSupplier.name} capacity constraint / stock shortage`,
+                                } as any)
+                              }
+                              disabled={isProcessing}
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded text-[11px] font-semibold cursor-pointer"
+                            >
+                              ✕ Reject PO
+                            </button>
+                          </>
                         )}
 
                         {po.status === 'CONFIRMED' && (
@@ -213,6 +248,12 @@ export const SupplierTab: React.FC<SupplierTabProps> = ({
                           >
                             3. Upload Invoice
                           </button>
+                        )}
+
+                        {po.status === 'REJECTED' && (
+                          <span className="text-[11px] font-semibold text-rose-600 italic">
+                            Order Declined
+                          </span>
                         )}
                       </td>
                     </tr>

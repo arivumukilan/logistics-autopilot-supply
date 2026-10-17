@@ -124,11 +124,12 @@ export default function App() {
 
   const handleSupplierAction = async (params: {
     poId: string;
-    action: 'CONFIRM' | 'SHIP' | 'UPLOAD_INVOICE';
+    action: 'CONFIRM' | 'SHIP' | 'UPLOAD_INVOICE' | 'REJECT';
     trackingNumber?: string;
     promisedDate?: string;
     invoiceAmount?: number;
     invoiceRef?: string;
+    notes?: string;
   }) => {
     setIsProcessing(true);
     try {
@@ -205,6 +206,28 @@ export default function App() {
       if (!res.ok) throw new Error(data.error);
       await loadSystemState();
       showToast(`Order ${poId} verified and CLOSED in ledger.`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRerouteOrder = async (poId: string) => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/po/reroute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ poId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      await loadSystemState();
+      showToast(`Order ${poId} rerouted to ${data.purchaseOrder.supplierName}!`);
+      if (trackedOrder && trackedOrder.id === poId) {
+        setTrackedOrder(data.purchaseOrder);
+      }
+    } catch (err: any) {
+      showToast(`Reroute error: ${err.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -315,6 +338,10 @@ export default function App() {
                 onNavigateToScreen={(scr) => setActiveScreen(scr)}
                 onApproveException={(id) => handleApprovalAction(id, 'APPROVE')}
                 onRejectException={(id) => handleApprovalAction(id, 'REJECT')}
+                onSupplierAction={handleSupplierAction}
+                onReceiveCargo={(id) => handleReceiveCargo(id)}
+                onCloseOrder={(id) => handleCloseOrder(id)}
+                onRerouteOrder={handleRerouteOrder}
                 isProcessing={isProcessing}
               />
             )}
@@ -325,6 +352,8 @@ export default function App() {
                 onSelectOrder={(ord) => setTrackedOrder(ord)}
                 onReceiveCargo={(id) => handleReceiveCargo(id)}
                 onCloseOrder={(id) => handleCloseOrder(id)}
+                onSupplierAction={handleSupplierAction}
+                onRerouteOrder={handleRerouteOrder}
               />
             )}
 
@@ -399,6 +428,12 @@ export default function App() {
         onClose={() => setTrackedOrder(null)}
         onReceiveCargo={handleReceiveCargo}
         onCloseOrder={handleCloseOrder}
+        onInspectDamageDock={(id) => {
+          setTrackedOrder(null);
+          setActiveScreen('receiving');
+        }}
+        onSupplierAction={handleSupplierAction}
+        onRerouteOrder={handleRerouteOrder}
       />
 
       {/* Floating Notification Toast */}

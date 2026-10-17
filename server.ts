@@ -91,7 +91,9 @@ async function startServer() {
         await runDispatchAgent(po.id);
       } else if (action === 'REJECT') {
         po.status = 'REJECTED';
-        po.approvalReason = notes || 'Manager Meena rejected the procurement requisition.';
+        po.finalResolution = 'REJECTED_BY_MANAGER';
+        po.rejectionReason = notes || 'Manager Meena rejected the procurement requisition.';
+        po.approvalReason = po.rejectionReason;
 
         db.stepLogs.unshift({
           id: `log-${Date.now()}`,
@@ -111,10 +113,10 @@ async function startServer() {
     }
   });
 
-  // 4. Supplier Portal Actions (Confirm, Ship, Upload Invoice)
+  // 4. Supplier Portal Actions (Confirm, Ship, Upload Invoice, Reject)
   app.post('/api/supplier/action', async (req, res) => {
     try {
-      const { poId, action, trackingNumber, promisedDate, invoiceAmount, invoiceRef } = req.body;
+      const { poId, action, trackingNumber, promisedDate, invoiceAmount, invoiceRef, notes } = req.body;
       const po = db.purchaseOrders.find((p) => p.id === poId);
       if (!po) return res.status(404).json({ error: 'PO not found' });
 
@@ -168,7 +170,74 @@ async function startServer() {
           po.isFlaggedIdle = false;
           po.idleReason = undefined;
         }
+      } else if (action === 'REJECT') {
+        po.status = 'REJECTED';
+        po.finalResolution = 'REJECTED_BY_SUPPLIER';
+        po.rejectionReason = notes || req.body.message || 'Supplier capacity constraint / temporary inventory outage.';
+        po.approvalReason = po.rejectionReason;
+
+        // Inbound rejection notice email
+        db.emails.unshift({
+          id: `em-${Date.now()}-rej`,
+          poId: po.id,
+          direction: 'INBOUND',
+          from: supplier?.email || 'vendor@supply.com',
+          to: 'autopilot@freshmart.com',
+          subject: `ORDER DECLINED: ${po.id} - ${po.rejectionReason}`,
+          body: `Dear FreshMart Logistics,\n\nWe cannot accept Purchase Order ${po.id} due to ${po.rejectionReason}.\n\nPlease trigger automated failover rerouting to an alternate supplier.\n\n${supplier?.name} Dispatch Desk`,
+          timestamp: now,
+          type: 'CONFIRMATION',
+        });
+
+        db.stepLogs.unshift({
+          id: `log-${Date.now()}`,
+          poId: po.id,
+          step: 'REJECTED',
+          actor: 'SUNRISE_SUPPLIER',
+          message: `${supplier?.name || 'Supplier'} declined order: ${po.rejectionReason}`,
+          timestamp: now,
+        });
       }
+
+      res.json({ success: true, purchaseOrder: po });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 4b. Autonomous Failover Reroute for Rejected Orders
+  app.post('/api/po/reroute', async (req, res) => {
+    try {
+      const { poId } = req.body;
+      const po = db.purchaseOrders.find((p) => p.id === poId);
+      if (!po) return res.status(404).json({ error: 'PO not found' });
+
+      // Find alternate supplier with score >= minimum
+      const currentSupplierId = po.supplierId;
+      const alternate = db.suppliers.find(
+        (s) => s.id !== currentSupplierId && s.itemCategory === 'Rice & Grains' && s.score >= db.policy.minimumSupplierScore
+      ) || db.suppliers.find((s) => s.id !== currentSupplierId && s.score >= db.policy.minimumSupplierScore) || db.suppliers[1];
+
+      po.supplierId = alternate.id;
+      po.supplierName = alternate.name;
+      po.status = 'APPROVED';
+      po.finalResolution = undefined;
+      po.rejectionReason = undefined;
+      po.isFlaggedIdle = false;
+      po.idleReason = undefined;
+
+      const now = new Date().toISOString();
+      db.stepLogs.unshift({
+        id: `log-${Date.now()}-reroute`,
+        poId: po.id,
+        step: 'APPROVED',
+        actor: 'SELF_HEALING_AGENT',
+        message: `⚡ FAILOVER REROUTED: Order ${po.id} re-assigned to alternate qualified supplier ${alternate.name} (Score: ${alternate.score}/10).`,
+        timestamp: now,
+      });
+
+      // Dispatch to new supplier
+      await runDispatchAgent(po.id);
 
       res.json({ success: true, purchaseOrder: po });
     } catch (err: any) {
@@ -249,13 +318,20 @@ async function startServer() {
     po.closedAt = now;
     po.isFlaggedIdle = false;
     po.idleReason = undefined;
+    po.finalResolution = (po.damagedQty && po.damagedQty > 0)
+      ? 'FULFILLED_WITH_DAMAGE_CLAIM'
+      : 'FULFILLED_PERFECT';
+
+    const closureMsg = (po.damagedQty && po.damagedQty > 0)
+      ? `Complete Flow Verified: PO ${po.id} finalized with debit memo adjustment (${po.damagedQty} units damaged). Receipt (${po.documents.receiptRef}) & Invoice (${po.documents.invoiceRef}) verified.`
+      : `Complete Flow Verified: PO ${po.id} matched with Goods Receipt (${po.documents.receiptRef}) & Invoice (${po.documents.invoiceRef}). Order successfully closed.`;
 
     db.stepLogs.unshift({
       id: `log-${Date.now()}`,
       poId: po.id,
       step: 'CLOSED',
       actor: 'APPROVAL_AGENT',
-      message: `Complete Flow Verified: PO ${po.id} matched with Goods Receipt (${po.documents.receiptRef}) & Invoice (${po.documents.invoiceRef}). Order successfully closed.`,
+      message: closureMsg,
       timestamp: now,
     });
 

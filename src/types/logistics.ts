@@ -51,6 +51,8 @@ export interface PurchaseOrder {
   damageNotes?: string;
   damageProofImage?: string;
   closedAt?: string;
+  finalResolution?: 'FULFILLED_PERFECT' | 'FULFILLED_WITH_DAMAGE_CLAIM' | 'REJECTED_BY_MANAGER' | 'REJECTED_BY_SUPPLIER' | 'CANCELLED_DELAY_BREACH';
+  rejectionReason?: string;
   chaseCount: number;
   lastChasedAt?: string;
   isFlaggedIdle: boolean;

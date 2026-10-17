@@ -14,6 +14,8 @@ import {
   X,
   Truck,
   ExternalLink,
+  FileUp,
+  Building2,
 } from 'lucide-react';
 
 interface DashboardViewProps {
@@ -24,6 +26,18 @@ interface DashboardViewProps {
   onNavigateToScreen: (screen: any) => void;
   onApproveException: (poId: string) => void;
   onRejectException: (poId: string) => void;
+  onSupplierAction?: (params: {
+    poId: string;
+    action: 'CONFIRM' | 'SHIP' | 'UPLOAD_INVOICE' | 'REJECT';
+    trackingNumber?: string;
+    promisedDate?: string;
+    invoiceAmount?: number;
+    invoiceRef?: string;
+    notes?: string;
+  }) => Promise<void>;
+  onReceiveCargo?: (poId: string) => void;
+  onCloseOrder?: (poId: string) => void;
+  onRerouteOrder?: (poId: string) => Promise<void>;
   isProcessing: boolean;
 }
 
@@ -46,6 +60,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigateToScreen,
   onApproveException,
   onRejectException,
+  onSupplierAction,
+  onReceiveCargo,
+  onCloseOrder,
+  onRerouteOrder,
   isProcessing,
 }) => {
   // Quick status tracker selection
@@ -53,6 +71,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const trackedOrder = orders.find((o) => o.id === trackedPoId) || orders[0];
 
   const pendingExceptions = orders.filter((o) => o.status === 'PENDING_MANAGER');
+  // Documentation incomplete applies strictly to orders received at dock where invoice or receipt is missing
   const missingDocOrders = orders.filter((o) => o.status === 'RECEIVED' && (!o.documents.invoiceUploaded || !o.documents.receiptUploaded));
   const activeOrders = orders.filter((o) => o.status !== 'CLOSED' && o.status !== 'REJECTED');
   const closedOrders = orders.filter((o) => o.status === 'CLOSED');
@@ -152,10 +171,58 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <span className="text-sm font-semibold text-slate-800">
                   {trackedOrder.item}
                 </span>
+                {trackedOrder.damagedQty && trackedOrder.damagedQty > 0 ? (
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                    ⚠️ {trackedOrder.damagedQty} DAMAGED
+                  </span>
+                ) : null}
               </div>
               <p className="text-xs text-slate-500 mt-1">
                 Assigned Vendor: <strong>{trackedOrder.supplierName || 'Evaluating...'}</strong> · Value: <strong className="font-mono tabular-nums">${trackedOrder.estimatedValue.toLocaleString()} USD</strong> · Target: {trackedOrder.neededBy}
               </p>
+
+              {/* Damaged Goods Verified Banner */}
+              {trackedOrder.damagedQty && trackedOrder.damagedQty > 0 && (
+                <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <strong className="font-bold text-amber-950 block">
+                      ⚠️ Cargo Defect Verified ({trackedOrder.damagedQty} damaged {trackedOrder.unit || 'units'}):
+                    </strong>
+                    <p className="mt-0.5 text-amber-800 leading-normal">
+                      {trackedOrder.damageNotes || 'Inspected by Ravi & Gemini Multimodal Cargo Inspector. Automated vendor claim notice dispatched.'}
+                    </p>
+                    <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px] font-medium text-amber-900">
+                      <span>Resolution: <strong>{trackedOrder.status === 'CLOSED' ? 'Debit Memo Settled on Invoice' : 'Debit Claim Dispatched to Vendor'}</strong></span>
+                      <span>·</span>
+                      <span>Proof: <strong>{trackedOrder.damageProofImage || 'Photo Verified'}</strong></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Order Rejection Banner */}
+              {trackedOrder.status === 'REJECTED' && (
+                <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="font-bold text-red-950 block">
+                        Order Rejected ({trackedOrder.finalResolution === 'REJECTED_BY_SUPPLIER' ? 'By Supplier' : 'By Manager'}):
+                      </strong>
+                      <p className="mt-0.5 text-red-800">{trackedOrder.rejectionReason || trackedOrder.approvalReason}</p>
+                    </div>
+                  </div>
+                  {onRerouteOrder && (
+                    <button
+                      onClick={() => onRerouteOrder(trackedOrder.id)}
+                      className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-xs font-semibold shrink-0 cursor-pointer shadow-xs"
+                    >
+                      ⚡ Auto-Reroute Supplier
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Quick Order Switcher Dropdown */}
@@ -168,7 +235,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               >
                 {orders.map((o) => (
                   <option key={o.id} value={o.id}>
-                    {o.id}: {o.item} ({o.status})
+                    {o.id}: {o.item} {o.damagedQty ? `(⚠️ ${o.damagedQty} dmg)` : `(${o.status})`}
                   </option>
                 ))}
               </select>
@@ -214,11 +281,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
 
-          {/* Status Breakdown Strip */}
-          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-4 text-slate-600">
+          {/* Status Breakdown Strip with Direct Quick Actions */}
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4 text-xs">
+            <div className="flex flex-wrap items-center gap-4 text-slate-600">
               <span className="flex items-center gap-1.5">
-                <strong className="text-slate-900">Current Step:</strong>
+                <strong className="text-slate-900">Stage:</strong>
                 <span className="px-2 py-0.5 rounded font-bold font-mono text-[11px] bg-slate-200 text-slate-900">
                   {trackedOrder.status}
                 </span>
@@ -231,33 +298,96 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {trackedOrder.documents.receiptUploaded ? (
                   <span className="text-emerald-600 font-semibold font-mono">Verified ({trackedOrder.documents.receiptRef})</span>
                 ) : (
-                  <span className="text-slate-400">Pending</span>
+                  <span className="text-slate-400">Pending Delivery</span>
                 )}
               </span>
 
               <span>·</span>
 
               <span className="flex items-center gap-1">
-                <strong>Invoice:</strong>
+                <strong>Commercial Invoice:</strong>
                 {trackedOrder.documents.invoiceUploaded ? (
                   <span className="text-emerald-600 font-semibold font-mono">Verified (${trackedOrder.documents.invoiceAmount?.toLocaleString()})</span>
+                ) : trackedOrder.status === 'RECEIVED' ? (
+                  <span className="text-amber-600 font-bold">Missing (Cargo Arrived; Invoice Due)</span>
                 ) : (
-                  <span className="text-amber-600 font-semibold">Missing</span>
+                  <span className="text-slate-400">Due upon dock delivery</span>
                 )}
               </span>
             </div>
 
-            <button
-              onClick={() => onSelectOrder(trackedOrder)}
-              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-md text-xs font-semibold cursor-pointer self-start sm:self-auto"
-            >
-              View Complete Audit Trail →
-            </button>
+            {/* Direct Quick Action Button to Advance Order */}
+            <div className="flex items-center gap-2 shrink-0">
+              {trackedOrder.status === 'ORDERED' && onSupplierAction && (
+                <button
+                  onClick={() => onSupplierAction({ poId: trackedOrder.id, action: 'CONFIRM' })}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-md font-semibold text-xs cursor-pointer shadow-xs"
+                >
+                  Confirm Acceptance (Supplier)
+                </button>
+              )}
+
+              {trackedOrder.status === 'CONFIRMED' && onSupplierAction && (
+                <button
+                  onClick={() =>
+                    onSupplierAction({
+                      poId: trackedOrder.id,
+                      action: 'SHIP',
+                      trackingNumber: `TRK-${Math.floor(100000 + Math.random() * 900000)}`,
+                    })
+                  }
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md font-semibold text-xs cursor-pointer shadow-xs"
+                >
+                  Mark Shipped (Supplier)
+                </button>
+              )}
+
+              {trackedOrder.status === 'SHIPPED' && onReceiveCargo && (
+                <button
+                  onClick={() => onReceiveCargo(trackedOrder.id)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-md font-semibold text-xs cursor-pointer shadow-xs"
+                >
+                  Receive at Dock (Sign GRN)
+                </button>
+              )}
+
+              {trackedOrder.status === 'RECEIVED' && !trackedOrder.documents.invoiceUploaded && onSupplierAction && (
+                <button
+                  onClick={() =>
+                    onSupplierAction({
+                      poId: trackedOrder.id,
+                      action: 'UPLOAD_INVOICE',
+                      invoiceAmount: trackedOrder.estimatedValue,
+                      invoiceRef: `INV-${trackedOrder.id.replace('PO-', '')}-${Math.floor(1000 + Math.random() * 9000)}`,
+                    })
+                  }
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-md font-semibold text-xs cursor-pointer shadow-xs"
+                >
+                  Upload Commercial Invoice
+                </button>
+              )}
+
+              {trackedOrder.status === 'DOCS_COMPLETE' && onCloseOrder && (
+                <button
+                  onClick={() => onCloseOrder(trackedOrder.id)}
+                  className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-md font-semibold text-xs cursor-pointer shadow-xs"
+                >
+                  Finalize & Close PO
+                </button>
+              )}
+
+              <button
+                onClick={() => onSelectOrder(trackedOrder)}
+                className="px-3 py-1.5 bg-white border border-slate-200 text-slate-800 hover:bg-slate-100 rounded-md font-semibold text-xs cursor-pointer"
+              >
+                Detailed Tracker →
+              </button>
+            </div>
           </div>
         </section>
       )}
 
-      {/* 3. Exceptions & Attention Alerts (Meena's Queue & Missing Invoices) */}
+      {/* 3. Exceptions & Attention Alerts (Meena's Queue & Overdue Invoices) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Exceptions Pending Manager Approval */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs">
@@ -319,13 +449,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
         </div>
 
-        {/* Missing Documentation Gate Alert */}
+        {/* Missing Documentation Gate Alert (Received but Missing Invoice) */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-2xs">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-amber-600"></span>
               <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                Documentation Incomplete Alerts ({missingDocOrders.length})
+                Overdue Commercial Invoices ({missingDocOrders.length})
               </h3>
             </div>
             <button
@@ -338,7 +468,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           {missingDocOrders.length === 0 ? (
             <div className="p-4 bg-slate-50 rounded-lg text-xs text-slate-500 text-center">
-              All received shipments have verified commercial invoices and receipts attached.
+              All arrived shipments have their commercial invoices attached. Zero closure blockers.
             </div>
           ) : (
             <div className="space-y-2.5">
@@ -402,7 +532,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {orders.slice(0, 6).map((po) => (
+              {orders.slice(0, 8).map((po) => (
                 <tr
                   key={po.id}
                   onClick={() => onSelectOrder(po)}
@@ -412,7 +542,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     {po.id}
                   </td>
                   <td className="py-3 px-4 font-medium text-slate-800">
-                    {po.item}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span>{po.item}</span>
+                      {po.damagedQty && po.damagedQty > 0 ? (
+                        <span className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                          ⚠️ {po.damagedQty} damaged
+                        </span>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-900 font-semibold">
                     ${po.estimatedValue.toLocaleString()}
@@ -422,26 +559,53 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   </td>
                   <td className="py-3 px-4">
                     <span className={`inline-block px-2 py-0.5 rounded text-[11px] font-semibold ${
-                      po.status === 'CLOSED'
+                      po.status === 'CLOSED' && po.finalResolution === 'FULFILLED_WITH_DAMAGE_CLAIM'
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                        : po.status === 'CLOSED'
                         ? 'bg-slate-100 text-slate-800'
                         : po.status === 'ORDERED' || po.status === 'SHIPPED'
                         ? 'bg-blue-50 text-blue-700'
+                        : po.status === 'CONFIRMED'
+                        ? 'bg-indigo-50 text-indigo-700'
+                        : po.status === 'RECEIVED' && po.damagedQty && po.damagedQty > 0
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
                         : po.status === 'RECEIVED'
                         ? 'bg-amber-50 text-amber-700'
                         : po.status === 'PENDING_MANAGER'
                         ? 'bg-purple-50 text-purple-700'
                         : po.status === 'REJECTED'
-                        ? 'bg-red-50 text-red-700'
+                        ? 'bg-red-50 text-red-700 border border-red-200'
                         : 'bg-emerald-50 text-emerald-700'
                     }`}>
-                      {po.status}
+                      {po.status === 'CLOSED' && po.finalResolution === 'FULFILLED_WITH_DAMAGE_CLAIM'
+                        ? 'CLOSED · CLAIM SETTLED'
+                        : po.status === 'CLOSED' && po.finalResolution === 'FULFILLED_PERFECT'
+                        ? 'CLOSED · PERFECT'
+                        : po.status === 'REJECTED' && po.finalResolution === 'REJECTED_BY_SUPPLIER'
+                        ? 'REJECTED · BY SUPPLIER'
+                        : po.status === 'REJECTED' && po.finalResolution === 'REJECTED_BY_MANAGER'
+                        ? 'REJECTED · BY MANAGER'
+                        : po.status === 'RECEIVED' && po.damagedQty && po.damagedQty > 0
+                        ? `RECEIVED (⚠️ ${po.damagedQty} DEFECTS)`
+                        : po.status}
                     </span>
                   </td>
                   <td className="py-3 px-4 text-slate-500">
                     {po.neededBy}
                   </td>
-                  <td className="py-3 px-4 text-right">
-                    <span className="text-emerald-700 hover:text-emerald-900 font-semibold text-[11px]">
+                  <td className="py-3 px-4 text-right whitespace-nowrap space-x-1.5" onClick={(e) => e.stopPropagation()}>
+                    {po.status === 'REJECTED' && onRerouteOrder && (
+                      <button
+                        onClick={() => onRerouteOrder(po.id)}
+                        className="px-2 py-0.5 bg-amber-600 hover:bg-amber-700 text-white rounded text-[10px] font-semibold cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Reroute
+                      </button>
+                    )}
+                    <span
+                      onClick={() => onSelectOrder(po)}
+                      className="text-emerald-700 hover:text-emerald-900 font-semibold text-[11px] cursor-pointer"
+                    >
                       Track Status →
                     </span>
                   </td>

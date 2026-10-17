@@ -427,6 +427,22 @@ Return JSON with:
       });
       db.stats.selfHealedOrdersCount += 1;
     }
+
+    // Automatically emit formal damage claim email notice to supplier
+    if (result.hasDamage && supplier) {
+      const nowIso = new Date().toISOString();
+      db.emails.unshift({
+        id: `em-${Date.now()}-claim`,
+        poId: po.id,
+        direction: 'OUTBOUND',
+        from: 'claims@freshmart.com',
+        to: supplier.email,
+        subject: `CARGO DEFECT NOTICE: ${po.id} - ${result.damagedBagsCount} Damaged Units Verified`,
+        body: `Dear ${supplier.name} Quality & Dispatch Team,\n\nFreshMart Dock Receiving and our Multimodal Quality Agent inspected cargo arrival for Purchase Order ${po.id} (${po.item}).\n\nDEFECT INSPECTION SUMMARY:\n- Damaged / Compromised Units: ${result.damagedBagsCount} ${po.unit} (${result.damagePercentage.toFixed(1)}% of shipment)\n- Severity Level: ${result.damageLevel}\n- Observed Defect: ${result.analysisSummary}\n- Vendor Score Adjustment: -${result.scorePenalty.toFixed(1)} rating points\n\nAttached Goods Receipt Note reflects ${result.damagedBagsCount} damaged/compromised units. Please issue an amended commercial invoice or credit memo reflecting the net accepted units.\n\nFreshMart Quality Control & Logistics Autopilot`,
+        timestamp: nowIso,
+        type: 'DAMAGE_CLAIM',
+      });
+    }
   }
 
   return result;
